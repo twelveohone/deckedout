@@ -8,7 +8,8 @@ const port = Number(process.env.PORT) || 3000;
 const corsOrigin = process.env.CORS_ORIGIN;
 app.use(
   cors({
-    origin: corsOrigin === "*" || !corsOrigin ? true : corsOrigin.split(",").map((s) => s.trim()),
+    origin:
+      corsOrigin === "*" || !corsOrigin ? true : corsOrigin.split(",").map((s: string) => s.trim()),
   })
 );
 app.use(express.json());

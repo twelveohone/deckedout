@@ -13,6 +13,10 @@ Render **Web Service** target. Root directory in Render: `backend-api`.
 
 `PORT` is set automatically by Render.
 
+## Render note
+
+Render often runs `npm install` in a production context (no devDependencies). `typescript` and `@types/*` are listed under **dependencies** so `npm run build` still works there.
+
 ## Scripts
 
 - `npm run build` — compile TypeScript to `dist/`
