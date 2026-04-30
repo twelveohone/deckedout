@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Decked Out",
+    "slug": "decked-out",
+    "description": "Decked Out - The Wild Card Party Game.",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/branding/icon/logoicon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.txsit.deckedout"
+    },
+    "android": {
+      "package": "com.txsit.deckedout",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/branding/icon/logoicon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
