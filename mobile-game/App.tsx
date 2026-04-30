@@ -136,6 +136,7 @@ export default function App() {
     tableSkin?: string;
     cardBack?: string;
     allowSkinDonations?: boolean;
+    roundCount?: number;
   }) {
     if (!game || !me?.is_host) return;
     try {
@@ -379,6 +380,18 @@ export default function App() {
                     {game.allow_skin_donations ? "Allowed (players can donate)" : "Not allowed"}
                   </Text>
                 </Pressable>
+                <Text style={styles.label}>How many rounds do you wanna play?</Text>
+                <View style={styles.rowWrap}>
+                  {[6, 8, 10].map((count) => (
+                    <Pressable
+                      key={count}
+                      style={[styles.chip, game.round_count === count && styles.chipActive]}
+                      onPress={() => void applyLobbySettings({ roundCount: count })}
+                    >
+                      <Text style={styles.chipText}>{count}</Text>
+                    </Pressable>
+                  ))}
+                </View>
                 <Pressable
                   style={styles.button}
                   onPress={async () => {

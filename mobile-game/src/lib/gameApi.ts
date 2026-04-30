@@ -16,6 +16,7 @@ export interface DbGame {
   status: "lobby" | "in_progress" | "completed";
   host_device_id: string;
   current_round: number;
+  round_count: number;
   table_skin: string;
   card_back: string;
   allow_skin_donations: boolean;
@@ -206,7 +207,7 @@ export async function advanceToNextRound(gameId: string): Promise<void> {
 
 export async function updateGameSettings(
   gameId: string,
-  updates: { tableSkin?: string; cardBack?: string; allowSkinDonations?: boolean }
+  updates: { tableSkin?: string; cardBack?: string; allowSkinDonations?: boolean; roundCount?: number }
 ): Promise<void> {
   await http<{ ok: boolean }>("/api/update-game-settings", {
     method: "POST",

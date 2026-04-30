@@ -6,7 +6,7 @@ import { Pool } from "pg";
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const HAND_SIZE = 7;
-const TOTAL_ROUNDS = 10;
+const DEFAULT_ROUNDS = 8;
 
 type Vibe = "Playful" | "Clever" | "Spicy" | "Dark";
 type Phase = "submit" | "reveal" | "result" | "done";
@@ -84,7 +84,8 @@ function genCode(): string {
 }
 
 async function initSchema(): Promise<void> {
-  await pool.query("CREATE TABLE IF NOT EXISTS games (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, vibe TEXT NOT NULL, status TEXT NOT NULL, host_device_id TEXT NOT NULL, current_round INT NOT NULL DEFAULT 0, table_skin TEXT NOT NULL DEFAULT 'classic', card_back TEXT NOT NULL DEFAULT 'stripes', allow_skin_donations BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await pool.query("CREATE TABLE IF NOT EXISTS games (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, vibe TEXT NOT NULL, status TEXT NOT NULL, host_device_id TEXT NOT NULL, current_round INT NOT NULL DEFAULT 0, round_count INT NOT NULL DEFAULT 8, table_skin TEXT NOT NULL DEFAULT 'classic', card_back TEXT NOT NULL DEFAULT 'stripes', allow_skin_donations BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS round_count INT NOT NULL DEFAULT 8");
   await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS table_skin TEXT NOT NULL DEFAULT 'classic'");
   await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS card_back TEXT NOT NULL DEFAULT 'stripes'");
   await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS allow_skin_donations BOOLEAN NOT NULL DEFAULT FALSE");
@@ -218,7 +219,7 @@ app.post("/api/create-game", async (req, res) => {
     const gameId = genId("game");
     const playerId = genId("player");
     const code = genCode();
-    await pool.query("INSERT INTO games (id, code, vibe, status, host_device_id, current_round, table_skin, card_back, allow_skin_donations) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [gameId, code, vibe, "lobby", deviceId, 0, "classic", "stripes", false]);
+    await pool.query("INSERT INTO games (id, code, vibe, status, host_device_id, current_round, round_count, table_skin, card_back, allow_skin_donations) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", [gameId, code, vibe, "lobby", deviceId, 0, DEFAULT_ROUNDS, "classic", "stripes", false]);
     await pool.query("INSERT INTO players (id, game_id, device_id, name, color, is_host, total_reactions) VALUES ($1,$2,$3,$4,$5,$6,$7)", [playerId, gameId, deviceId, hostName, AVATAR_COLORS[0], true, 0]);
     res.json(await getState(code, deviceId));
   } catch (err) {
@@ -417,10 +418,10 @@ app.post("/api/try-advance-result", async (req, res) => {
 app.post("/api/advance-round", async (req, res) => {
   try {
     const { gameId } = req.body as { gameId: string };
-    const game = (await pool.query("SELECT * FROM games WHERE id = $1", [gameId])).rows[0] as { current_round: number; vibe: Vibe } | undefined;
+    const game = (await pool.query("SELECT * FROM games WHERE id = $1", [gameId])).rows[0] as { current_round: number; vibe: Vibe; round_count: number } | undefined;
     if (!game) return res.status(404).json({ error: "Game not found" });
     const nextRound = game.current_round + 1;
-    if (nextRound > TOTAL_ROUNDS) {
+    if (nextRound > (game.round_count || DEFAULT_ROUNDS)) {
       await pool.query("UPDATE games SET status = $1 WHERE id = $2", ["completed", gameId]);
       return res.json({ ok: true, completed: true });
     }
@@ -438,15 +439,22 @@ app.post("/api/advance-round", async (req, res) => {
 
 app.post("/api/update-game-settings", async (req, res) => {
   try {
-    const { gameId, tableSkin, cardBack, allowSkinDonations } = req.body as {
+    const { gameId, tableSkin, cardBack, allowSkinDonations, roundCount } = req.body as {
       gameId: string;
       tableSkin?: string;
       cardBack?: string;
       allowSkinDonations?: boolean;
+      roundCount?: number;
     };
     await pool.query(
-      "UPDATE games SET table_skin = COALESCE($1, table_skin), card_back = COALESCE($2, card_back), allow_skin_donations = COALESCE($3, allow_skin_donations) WHERE id = $4",
-      [tableSkin ?? null, cardBack ?? null, typeof allowSkinDonations === "boolean" ? allowSkinDonations : null, gameId]
+      "UPDATE games SET table_skin = COALESCE($1, table_skin), card_back = COALESCE($2, card_back), allow_skin_donations = COALESCE($3, allow_skin_donations), round_count = COALESCE($4, round_count) WHERE id = $5",
+      [
+        tableSkin ?? null,
+        cardBack ?? null,
+        typeof allowSkinDonations === "boolean" ? allowSkinDonations : null,
+        typeof roundCount === "number" ? roundCount : null,
+        gameId,
+      ]
     );
     res.json({ ok: true });
   } catch (err) {
