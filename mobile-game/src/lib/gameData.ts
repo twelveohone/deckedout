@@ -57,6 +57,20 @@ export const REACTIONS = [
   { id: "mind", emoji: "🤯", label: "Mind blown" },
 ] as const;
 
+export const TABLE_SKINS = [
+  { id: "classic", name: "Classic Felt" },
+  { id: "sunset", name: "Sunset Glow" },
+  { id: "midnight", name: "Midnight Neon" },
+  { id: "gold", name: "Golden Hour" },
+] as const;
+
+export const CARD_BACKS = [
+  { id: "stripes", name: "Confetti Stripes" },
+  { id: "neon", name: "Neon Grid" },
+  { id: "diamonds", name: "Casino Diamonds" },
+  { id: "retro", name: "Retro Pop" },
+] as const;
+
 export function eligibleCards<T extends Card>(cards: T[], vibe: Vibe): T[] {
   const allowed = VIBE_ELIGIBILITY[vibe];
   return cards.filter((c) => allowed.includes(c.vibe));

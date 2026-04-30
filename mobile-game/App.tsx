@@ -17,7 +17,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { REACTIONS, VIBES, Vibe } from "./src/lib/gameData";
+import { CARD_BACKS, REACTIONS, TABLE_SKINS, VIBES, Vibe } from "./src/lib/gameData";
 import {
   advanceToNextRound,
   createGame,
@@ -38,6 +38,7 @@ import {
   startGame,
   submitAnswer,
   tryAdvanceToResult,
+  updateGameSettings,
 } from "./src/lib/gameApi";
 
 type Screen = "home" | "setup" | "lobby" | "submit" | "reveal" | "result" | "end";
@@ -119,6 +120,31 @@ export default function App() {
     () => players.find((p) => p.id === round?.winner_player_id),
     [players, round?.winner_player_id]
   );
+
+  function leaveCurrentGame() {
+    setGame(null);
+    setMe(null);
+    setPlayers([]);
+    setRound(null);
+    setSubmissions([]);
+    setReactions([]);
+    setMyHand([]);
+    setScreen("home");
+  }
+
+  async function applyLobbySettings(updates: {
+    tableSkin?: string;
+    cardBack?: string;
+    allowSkinDonations?: boolean;
+  }) {
+    if (!game || !me?.is_host) return;
+    try {
+      await updateGameSettings(game.id, updates);
+      await refreshState(game, me);
+    } catch (err: unknown) {
+      Alert.alert("Settings update failed", err instanceof Error ? err.message : "Unknown error");
+    }
+  }
 
   async function refreshState(g: DbGame, p: DbPlayer) {
     const latestGame = await getGameByCode(g.code);
@@ -318,17 +344,56 @@ export default function App() {
               </Text>
             ))}
             {me?.is_host && (
-              <Pressable
-                style={styles.button}
-                onPress={async () => {
-                  if (!game) return;
-                  await startGame(game.id);
-                  await refreshState(game, me!);
-                }}
-              >
-                <Text style={styles.buttonText}>Deal the first round 🃏</Text>
-              </Pressable>
+              <>
+                <View style={styles.divider} />
+                <Text style={styles.label}>Table Skin</Text>
+                <View style={styles.rowWrap}>
+                  {TABLE_SKINS.map((skin) => (
+                    <Pressable
+                      key={skin.id}
+                      style={[styles.chip, game.table_skin === skin.id && styles.chipActive]}
+                      onPress={() => void applyLobbySettings({ tableSkin: skin.id })}
+                    >
+                      <Text style={styles.chipText}>{skin.name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={styles.label}>Card Back</Text>
+                <View style={styles.rowWrap}>
+                  {CARD_BACKS.map((back) => (
+                    <Pressable
+                      key={back.id}
+                      style={[styles.chip, game.card_back === back.id && styles.chipActive]}
+                      onPress={() => void applyLobbySettings({ cardBack: back.id })}
+                    >
+                      <Text style={styles.chipText}>{back.name}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={styles.label}>Skin Donations</Text>
+                <Pressable
+                  style={[styles.chip, game.allow_skin_donations && styles.chipActive]}
+                  onPress={() => void applyLobbySettings({ allowSkinDonations: !game.allow_skin_donations })}
+                >
+                  <Text style={styles.chipText}>
+                    {game.allow_skin_donations ? "Allowed (players can donate)" : "Not allowed"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.button}
+                  onPress={async () => {
+                    if (!game) return;
+                    await startGame(game.id);
+                    await refreshState(game, me!);
+                  }}
+                >
+                  <Text style={styles.buttonText}>Deal the first round 🃏</Text>
+                </Pressable>
+              </>
             )}
+            <Pressable style={({ pressed }) => [styles.buttonGhost, pressed && styles.buttonGhostPressed]} onPress={leaveCurrentGame}>
+              <Text style={styles.buttonGhostText}>Leave Game</Text>
+            </Pressable>
           </View>
         )}
 
@@ -351,6 +416,9 @@ export default function App() {
                   <Text style={styles.text}>{card.text}</Text>
                 </Pressable>
               ))}
+            <Pressable style={({ pressed }) => [styles.buttonGhost, pressed && styles.buttonGhostPressed]} onPress={leaveCurrentGame}>
+              <Text style={styles.buttonGhostText}>Leave Game</Text>
+            </Pressable>
           </View>
         )}
 
@@ -384,6 +452,9 @@ export default function App() {
                 </View>
               );
             })}
+            <Pressable style={({ pressed }) => [styles.buttonGhost, pressed && styles.buttonGhostPressed]} onPress={leaveCurrentGame}>
+              <Text style={styles.buttonGhostText}>Leave Game</Text>
+            </Pressable>
           </View>
         )}
 
@@ -411,6 +482,9 @@ export default function App() {
                 <Text style={styles.buttonText}>Keep the party going →</Text>
               </Pressable>
             )}
+            <Pressable style={({ pressed }) => [styles.buttonGhost, pressed && styles.buttonGhostPressed]} onPress={leaveCurrentGame}>
+              <Text style={styles.buttonGhostText}>Leave Game</Text>
+            </Pressable>
           </View>
         )}
 
@@ -425,6 +499,9 @@ export default function App() {
                     {p.name}: {p.total_reactions}
                   </Text>
                 ))}
+            <Pressable style={({ pressed }) => [styles.buttonGhost, pressed && styles.buttonGhostPressed]} onPress={leaveCurrentGame}>
+              <Text style={styles.buttonGhostText}>Back to Home</Text>
+            </Pressable>
             </View>
           )}
         </ScrollView>

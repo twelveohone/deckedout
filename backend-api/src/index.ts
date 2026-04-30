@@ -53,6 +53,7 @@ const ANSWERS: Card[] = [
   { id: "a16", text: "the heat death of the universe", vibe: "Dark" },
 ];
 const AVATAR_COLORS = ["#fb7185", "#38bdf8", "#34d399", "#f59e0b", "#818cf8", "#f97316", "#14b8a6"];
+const BOT_NAMES = ["Disco Bot", "Neon Bot", "Chaos Bot", "Glitter Bot"];
 
 const corsOrigin = process.env.CORS_ORIGIN;
 app.use(cors({ origin: corsOrigin === "*" || !corsOrigin ? true : corsOrigin.split(",").map((s) => s.trim()) }));
@@ -83,8 +84,12 @@ function genCode(): string {
 }
 
 async function initSchema(): Promise<void> {
-  await pool.query("CREATE TABLE IF NOT EXISTS games (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, vibe TEXT NOT NULL, status TEXT NOT NULL, host_device_id TEXT NOT NULL, current_round INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
-  await pool.query("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE, device_id TEXT NOT NULL, name TEXT NOT NULL, color TEXT NOT NULL, is_host BOOLEAN NOT NULL DEFAULT FALSE, total_reactions INT NOT NULL DEFAULT 0, joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(game_id, device_id))");
+  await pool.query("CREATE TABLE IF NOT EXISTS games (id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, vibe TEXT NOT NULL, status TEXT NOT NULL, host_device_id TEXT NOT NULL, current_round INT NOT NULL DEFAULT 0, table_skin TEXT NOT NULL DEFAULT 'classic', card_back TEXT NOT NULL DEFAULT 'stripes', allow_skin_donations BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+  await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS table_skin TEXT NOT NULL DEFAULT 'classic'");
+  await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS card_back TEXT NOT NULL DEFAULT 'stripes'");
+  await pool.query("ALTER TABLE games ADD COLUMN IF NOT EXISTS allow_skin_donations BOOLEAN NOT NULL DEFAULT FALSE");
+  await pool.query("CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE, device_id TEXT NOT NULL, name TEXT NOT NULL, color TEXT NOT NULL, is_host BOOLEAN NOT NULL DEFAULT FALSE, is_bot BOOLEAN NOT NULL DEFAULT FALSE, total_reactions INT NOT NULL DEFAULT 0, joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(game_id, device_id))");
+  await pool.query("ALTER TABLE players ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT FALSE");
   await pool.query("CREATE TABLE IF NOT EXISTS rounds (id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE, round_number INT NOT NULL, prompt_id TEXT NOT NULL, prompt_text TEXT NOT NULL, prompt_vibe TEXT NOT NULL, phase TEXT NOT NULL, winner_player_id TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(game_id, round_number))");
   await pool.query("CREATE TABLE IF NOT EXISTS submissions (id TEXT PRIMARY KEY, round_id TEXT NOT NULL REFERENCES rounds(id) ON DELETE CASCADE, player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE, card_id TEXT NOT NULL, card_text TEXT NOT NULL, card_vibe TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(round_id, player_id))");
   await pool.query("CREATE TABLE IF NOT EXISTS reactions (id TEXT PRIMARY KEY, submission_id TEXT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE, player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE, reaction_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(submission_id, player_id))");
@@ -116,6 +121,87 @@ async function dealNewHandForPlayer(playerId: string, vibe: Vibe): Promise<void>
   }
 }
 
+async function ensureTestBots(gameId: string): Promise<void> {
+  const playerRows = (
+    await pool.query("SELECT id FROM players WHERE game_id = $1", [gameId])
+  ).rows as Array<{ id: string }>;
+  if (playerRows.length > 1) return;
+  for (let i = 0; i < 2; i += 1) {
+    const botId = genId("player");
+    const botDevice = `bot-${gameId}-${i + 1}`;
+    await pool.query(
+      "INSERT INTO players (id, game_id, device_id, name, color, is_host, is_bot, total_reactions) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [
+        botId,
+        gameId,
+        botDevice,
+        BOT_NAMES[i % BOT_NAMES.length],
+        AVATAR_COLORS[(i + 1) % AVATAR_COLORS.length],
+        false,
+        true,
+        0,
+      ]
+    );
+  }
+}
+
+async function autoBotSubmissions(gameId: string, roundId: string): Promise<void> {
+  const game = (await pool.query("SELECT vibe FROM games WHERE id = $1", [gameId])).rows[0] as { vibe: Vibe } | undefined;
+  const bots = (
+    await pool.query("SELECT id FROM players WHERE game_id = $1 AND is_bot = TRUE", [gameId])
+  ).rows as Array<{ id: string }>;
+  for (const bot of bots) {
+    const hand = (
+      await pool.query("SELECT card_id, card_text, card_vibe FROM player_hands WHERE player_id = $1 LIMIT 1", [bot.id])
+    ).rows[0] as { card_id: string; card_text: string; card_vibe: string } | undefined;
+    if (!hand) continue;
+    await pool.query(
+      "INSERT INTO submissions (id, round_id, player_id, card_id, card_text, card_vibe) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (round_id, player_id) DO NOTHING",
+      [genId("sub"), roundId, bot.id, hand.card_id, hand.card_text, hand.card_vibe]
+    );
+    await pool.query("DELETE FROM player_hands WHERE player_id = $1 AND card_id = $2", [bot.id, hand.card_id]);
+    if (game) {
+      const existing = (
+        await pool.query("SELECT card_id FROM player_hands WHERE player_id = $1", [bot.id])
+      ).rows as Array<{ card_id: string }>;
+      const excluded = new Set(existing.map((c) => c.card_id));
+      excluded.add(hand.card_id);
+      const choices = eligibleCards(ANSWERS, game.vibe).filter((c) => !excluded.has(c.id));
+      if (choices.length) {
+        const next = pickRandom(choices);
+        await pool.query(
+          "INSERT INTO player_hands (id, player_id, card_id, card_text, card_vibe) VALUES ($1,$2,$3,$4,$5)",
+          [genId("hand"), bot.id, next.id, next.text, next.vibe]
+        );
+      }
+    }
+  }
+}
+
+async function autoBotReactions(roundId: string): Promise<void> {
+  const submissions = (
+    await pool.query("SELECT id, player_id FROM submissions WHERE round_id = $1", [roundId])
+  ).rows as Array<{ id: string; player_id: string }>;
+  if (!submissions.length) return;
+  const botPlayers = (
+    await pool.query(
+      "SELECT p.id FROM players p JOIN rounds r ON r.game_id = p.game_id WHERE r.id = $1 AND p.is_bot = TRUE",
+      [roundId]
+    )
+  ).rows as Array<{ id: string }>;
+  const reactionPool = ["lol", "love", "yikes", "mind"];
+  for (const bot of botPlayers) {
+    for (const sub of submissions) {
+      if (sub.player_id === bot.id) continue;
+      const reactionId = reactionPool[Math.floor(Math.random() * reactionPool.length)];
+      await pool.query(
+        "INSERT INTO reactions (id, submission_id, player_id, reaction_id) VALUES ($1,$2,$3,$4) ON CONFLICT (submission_id, player_id) DO NOTHING",
+        [genId("react"), sub.id, bot.id, reactionId]
+      );
+    }
+  }
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true, service: "decked-out-api" }));
 app.get("/health/db", async (_req, res) => {
   try {
@@ -132,7 +218,7 @@ app.post("/api/create-game", async (req, res) => {
     const gameId = genId("game");
     const playerId = genId("player");
     const code = genCode();
-    await pool.query("INSERT INTO games (id, code, vibe, status, host_device_id, current_round) VALUES ($1,$2,$3,$4,$5,$6)", [gameId, code, vibe, "lobby", deviceId, 0]);
+    await pool.query("INSERT INTO games (id, code, vibe, status, host_device_id, current_round, table_skin, card_back, allow_skin_donations) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [gameId, code, vibe, "lobby", deviceId, 0, "classic", "stripes", false]);
     await pool.query("INSERT INTO players (id, game_id, device_id, name, color, is_host, total_reactions) VALUES ($1,$2,$3,$4,$5,$6,$7)", [playerId, gameId, deviceId, hostName, AVATAR_COLORS[0], true, 0]);
     res.json(await getState(code, deviceId));
   } catch (err) {
@@ -235,10 +321,13 @@ app.post("/api/start-game", async (req, res) => {
     const game = (await pool.query("SELECT * FROM games WHERE id = $1", [gameId])).rows[0] as { vibe: Vibe; status: GameStatus } | undefined;
     if (!game) return res.status(404).json({ error: "Game not found" });
     if (game.status !== "lobby") return res.json({ ok: true });
+    await ensureTestBots(gameId);
     const players = (await pool.query("SELECT id FROM players WHERE game_id = $1", [gameId])).rows as Array<{ id: string }>;
     for (const p of players) await dealNewHandForPlayer(p.id, game.vibe);
     const prompt = pickRandom(eligibleCards(PROMPTS, game.vibe));
-    await pool.query("INSERT INTO rounds (id, game_id, round_number, prompt_id, prompt_text, prompt_vibe, phase, winner_player_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [genId("round"), gameId, 1, prompt.id, prompt.text, prompt.vibe, "submit", null]);
+    const roundId = genId("round");
+    await pool.query("INSERT INTO rounds (id, game_id, round_number, prompt_id, prompt_text, prompt_vibe, phase, winner_player_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [roundId, gameId, 1, prompt.id, prompt.text, prompt.vibe, "submit", null]);
+    await autoBotSubmissions(gameId, roundId);
     await pool.query("UPDATE games SET status = $1, current_round = $2 WHERE id = $3", ["in_progress", 1, gameId]);
     res.json({ ok: true });
   } catch (err) {
@@ -264,7 +353,10 @@ app.post("/api/submit-answer", async (req, res) => {
     }
     const playersCount = Number((await pool.query("SELECT COUNT(*)::int AS c FROM players WHERE game_id = $1", [gameId])).rows[0]?.c ?? 0);
     const subsCount = Number((await pool.query("SELECT COUNT(*)::int AS c FROM submissions WHERE round_id = $1", [roundId])).rows[0]?.c ?? 0);
-    if (subsCount >= playersCount) await pool.query("UPDATE rounds SET phase = $1 WHERE id = $2 AND phase = $3", ["reveal", roundId, "submit"]);
+    if (subsCount >= playersCount) {
+      await pool.query("UPDATE rounds SET phase = $1 WHERE id = $2 AND phase = $3", ["reveal", roundId, "submit"]);
+      await autoBotReactions(roundId);
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -334,9 +426,29 @@ app.post("/api/advance-round", async (req, res) => {
     }
     await pool.query("UPDATE rounds SET phase = $1 WHERE game_id = $2 AND round_number = $3", ["done", gameId, game.current_round]);
     const prompt = pickRandom(eligibleCards(PROMPTS, game.vibe));
-    await pool.query("INSERT INTO rounds (id, game_id, round_number, prompt_id, prompt_text, prompt_vibe, phase, winner_player_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [genId("round"), gameId, nextRound, prompt.id, prompt.text, prompt.vibe, "submit", null]);
+    const roundId = genId("round");
+    await pool.query("INSERT INTO rounds (id, game_id, round_number, prompt_id, prompt_text, prompt_vibe, phase, winner_player_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [roundId, gameId, nextRound, prompt.id, prompt.text, prompt.vibe, "submit", null]);
+    await autoBotSubmissions(gameId, roundId);
     await pool.query("UPDATE games SET current_round = $1 WHERE id = $2", [nextRound, gameId]);
     res.json({ ok: true, completed: false });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/update-game-settings", async (req, res) => {
+  try {
+    const { gameId, tableSkin, cardBack, allowSkinDonations } = req.body as {
+      gameId: string;
+      tableSkin?: string;
+      cardBack?: string;
+      allowSkinDonations?: boolean;
+    };
+    await pool.query(
+      "UPDATE games SET table_skin = COALESCE($1, table_skin), card_back = COALESCE($2, card_back), allow_skin_donations = COALESCE($3, allow_skin_donations) WHERE id = $4",
+      [tableSkin ?? null, cardBack ?? null, typeof allowSkinDonations === "boolean" ? allowSkinDonations : null, gameId]
+    );
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

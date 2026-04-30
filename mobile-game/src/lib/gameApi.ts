@@ -16,6 +16,9 @@ export interface DbGame {
   status: "lobby" | "in_progress" | "completed";
   host_device_id: string;
   current_round: number;
+  table_skin: string;
+  card_back: string;
+  allow_skin_donations: boolean;
 }
 
 export interface DbPlayer {
@@ -199,4 +202,14 @@ export async function tryAdvanceToResult(gameId: string, roundId: string): Promi
 
 export async function advanceToNextRound(gameId: string): Promise<void> {
   await http<{ ok: boolean }>("/api/advance-round", { method: "POST", body: JSON.stringify({ gameId }) });
+}
+
+export async function updateGameSettings(
+  gameId: string,
+  updates: { tableSkin?: string; cardBack?: string; allowSkinDonations?: boolean }
+): Promise<void> {
+  await http<{ ok: boolean }>("/api/update-game-settings", {
+    method: "POST",
+    body: JSON.stringify({ gameId, ...updates }),
+  });
 }
